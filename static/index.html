@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Html5 Practice</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"></script>
+    <script src="http://cdn.graphalchemist.com/alchemy.min.js"></script>
+</head>
+<body>
+
+<!--
+
+Redis Cluster 배치상태 그림 그리기
+
+1. cluster nodes 명령 입력 textarea
+2. generate 버튼
+3. textarea 의 값을 읽어들여서 파싱해서 그래프로 그리기
+	1. 각 row 별로 객체로 생성
+	2. 각 객체별 ip 정보를 기준으로 그루핑 하기
+	3. 그루핑 기준으로 네모박스에 그리기
+	4. 각 객체들 중 slave 인 경우에 master 노드를 찾기
+	5. slave 에서 master 로 선 그리기
+
+smlee@ubuntu-server:~/redis-3.2.5/utils/create-cluster$ redis-cli -c -h 127.0.0.1 -p 30001 cluster nodes
+
+552cd17d6d1293862ce25b77259a10fb1292f24c 127.0.0.1:30006 slave 9d6a409107676e039afc893ed9e1af583e2c5964 0 1480834423567 6 connected
+9d6a409107676e039afc893ed9e1af583e2c5964 127.0.0.1:30003 master - 0 1480834423567 3 connected 10923-16383
+372f8d44a000947bbc60bcfa4ccafb7442f4b952 127.0.0.1:30001 myself,master - 0 0 1 connected 0-5460
+62631d560b704d58670f1406733755e3d1d4b5dc 127.0.0.1:30002 master - 0 1480834423667 2 connected 5461-10922
+c578b8010e483ea05dccb05ef713bb56f339f755 127.0.0.1:30005 slave 62631d560b704d58670f1406733755e3d1d4b5dc 0 1480834423567 5 connected
+db07de8e2a4d94eeb95a983d5ce3bf0a03a4a361 127.0.0.1:30004 slave 372f8d44a000947bbc60bcfa4ccafb7442f4b952 0 1480834423567 4 connected
+
+
+http://graphalchemist.github.io/Alchemy/#/examples
+그래 라이브러리를 사용하자.
+
+ -->
+
+    <div class="jumbotron text-center">
+        <h1>Redis Cluster Node status</h1>
+        <p>Redis Cluster 의 Node 상태 확인</p>
+    </div>
+
+    <div class="container">
+
+        <div class="row">
+            <textarea id="ta" width="1000" height="200" >
+552cd17d6d1293862ce25b77259a10fb1292f24c 127.0.0.1:30006 slave 9d6a409107676e039afc893ed9e1af583e2c5964 0 1480834423567 6 connected
+9d6a409107676e039afc893ed9e1af583e2c5964 127.0.0.1:30003 master - 0 1480834423567 3 connected 10923-16383
+372f8d44a000947bbc60bcfa4ccafb7442f4b952 127.0.0.1:30001 myself,master - 0 0 1 connected 0-5460
+62631d560b704d58670f1406733755e3d1d4b5dc 127.0.0.1:30002 master - 0 1480834423667 2 connected 5461-10922
+c578b8010e483ea05dccb05ef713bb56f339f755 127.0.0.1:30005 slave 62631d560b704d58670f1406733755e3d1d4b5dc 0 1480834423567 5 connected
+db07de8e2a4d94eeb95a983d5ce3bf0a03a4a361 127.0.0.1:30004 slave 372f8d44a000947bbc60bcfa4ccafb7442f4b952 0 1480834423567 4 connected
+            </textarea>
+        </div>
+        <div class="row">
+            <button type="button"
+                    onclick="generateNode()">
+                Generate</button>
+        </div>
+
+        <div class="row">
+            <canvas id="myCanvas" width="800" height="500"
+                    style="border:1px solid #000000;">
+            </canvas>
+        </div>
+    </div>
+
+
+    <script>
+        function drawBox() {
+
+            var canvas = document.getElementById("myCanvas");
+            var ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#FF0000";
+            ctx.fillRect(0,0,150,75);
+        }
+
+        function makeNodeObject( line ) {
+            var base = line.trim();
+            var infos = base.split( " " );
+
+            var node = new Object();
+
+            node["sid"] = infos[0];
+            node["addr"] = infos[1];
+            node["ip"] = node["addr"].split( ":" )[0];
+            node["port"] = node["addr"].split( ":" )[1];
+
+            node["type"] = infos[2];
+
+            if ( infos[2].indexOf( "master" ) >=0  ) {
+                node["isMaster"] = true;
+            }else
+            {
+                node["isMaster"] = false;
+                node["psid"] = infos[3];
+            }
+
+            return node;
+        }
+
+        var arrNode = new Array();
+        var masterNodes = new Array();
+        var slaveNodes = new Array();
+        var ipGroup = new Object();
+
+        function generateNode() {
+
+            var ta = document.getElementById("ta");
+            var textArea = ta.value;
+            var lines = textArea.split("\n")
+
+            for( i = 0 ; i < lines.length - 1 ; i ++ ) {
+                var line = lines[i];
+                var node = makeNodeObject( line );
+                arrNode.push( node );
+
+                if( node["isMaster"] ) {
+                    masterNodes = node;
+                } else {
+                    slaveNodes = node;
+                }
+
+                var ip = node["ip"];
+
+                if( ipGroup[ip] == null ) {
+                    ipGroup[ip] = new Array();
+                }
+
+                ipGroup[ip].push( node );
+
+
+
+            }
+
+            for( i = 0 ; i < slaveNodes.length - 1 ; i ++ ) {
+                var node = slaveNodes[i];
+
+                var psid = node["psid"];
+
+                for( j = 0 ; j < masterNodes.length -1 ; j ++ ) {
+                    var masterNode = masterNodes[j];
+
+                    if( psid == masterNode["sid"] ) {
+                        node["masterNode"] = masterNode;
+                        break;
+                    }
+                }
+            }
+
+
+
+
+        }
+
+
+
+
+
+    </script>
+</body>
+
+
+
+
+</html>
